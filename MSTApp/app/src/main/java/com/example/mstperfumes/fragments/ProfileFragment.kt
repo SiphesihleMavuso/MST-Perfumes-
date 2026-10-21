@@ -16,6 +16,7 @@ import com.example.mstperfumes.adapters.WishlistAdapter
 import com.example.mstperfumes.data.DatabaseRepository
 import com.example.mstperfumes.data.UserRepository
 import com.example.mstperfumes.databinding.FragmentProfileBinding
+import com.example.mstperfumes.models.User
 
 class ProfileFragment : Fragment() {
 
@@ -46,9 +47,24 @@ class ProfileFragment : Fragment() {
         showOrdersView()
     }
 
+    private fun getLoggedInUser(): User? {
+        val activeUser = UserRepository.getActiveUser()
+        if (activeUser != null) return activeUser
+
+        val sharedPrefs = requireContext().getSharedPreferences("UserPrefs", android.content.Context.MODE_PRIVATE)
+        val email = sharedPrefs.getString("userEmail", null)
+        if (!email.isNullOrEmpty()) {
+            val user = dbRepo.findUserByEmail(email)
+            if (user != null) {
+                UserRepository.setActiveUser(user)
+                return user
+            }
+        }
+        return dbRepo.getAllUsers().firstOrNull()
+    }
+
     private fun setupUserHeader() {
-        val user = UserRepository.getActiveUser()
-            ?: dbRepo.getAllUsers().firstOrNull()
+        val user = getLoggedInUser()
 
         val name = user?.name ?: "Guest User"
         val email = user?.email ?: "user@mstperfumes.com"
@@ -61,8 +77,7 @@ class ProfileFragment : Fragment() {
     }
 
     private fun setupRecyclerViews() {
-        val user = UserRepository.getActiveUser()
-            ?: dbRepo.getAllUsers().firstOrNull()
+        val user = getLoggedInUser()
         val userId = user?.id ?: 1
 
         // Orders RecyclerView
@@ -85,7 +100,8 @@ class ProfileFragment : Fragment() {
                 bulkPrice = wishItem.bulkPrice,
                 scentProfile = wishItem.scentProfile,
                 imageResId = wishItem.imageResId,
-                category = wishItem.category
+                category = wishItem.category,
+                imageUri = wishItem.imageUri
             ))
             refreshData()
             Toast.makeText(requireContext(), "${wishItem.productName} removed from wishlist", Toast.LENGTH_SHORT).show()
@@ -106,14 +122,16 @@ class ProfileFragment : Fragment() {
         binding.tabWishlist.setOnClickListener { showWishlistView() }
         binding.tabWallet.setOnClickListener { showWalletView() }
         binding.tabMessages.setOnClickListener { showMessagesView() }
+        binding.tabHelp.setOnClickListener {
+            val intent = Intent(requireContext(), com.example.mstperfumes.HelpSupportActivity::class.java)
+            startActivity(intent)
+        }
         binding.tabSettings.setOnClickListener { showSettingsView() }
         binding.tabLogout.setOnClickListener {
-            UserRepository.clearActiveSession()
-            val sharedPrefs = requireContext().getSharedPreferences("UserPrefs", android.content.Context.MODE_PRIVATE)
-            sharedPrefs.edit().clear().apply()
-
+            com.example.mstperfumes.data.SsoAuthManager.signOut(requireContext())
             Toast.makeText(requireContext(), "Logged out", Toast.LENGTH_SHORT).show()
             val intent = Intent(requireContext(), LoginActivity::class.java)
+            intent.putExtra("force_relogin", true)
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             startActivity(intent)
         }
@@ -258,8 +276,7 @@ class ProfileFragment : Fragment() {
     }
 
     private fun refreshData() {
-        val user = UserRepository.getActiveUser()
-            ?: dbRepo.getAllUsers().firstOrNull()
+        val user = getLoggedInUser()
         val userId = user?.id ?: 1
 
         val orders = dbRepo.getOrdersForUser(userId)

@@ -44,6 +44,10 @@ class MainActivity : AppCompatActivity() {
         setupBottomNavigation()
         setupNavHeader()
 
+        // Initialize Firebase Cloud Messaging (FCM) Order Update Notifications
+        com.example.mstperfumes.data.FcmNotificationHelper.initNotificationChannel(this)
+        com.example.mstperfumes.data.FcmNotificationHelper.requestNotificationPermission(this)
+
         // Handle Navigation Drawer item clicks
         navView.setNavigationItemSelectedListener { menuItem ->
             when (menuItem.itemId) {
@@ -56,17 +60,19 @@ class MainActivity : AppCompatActivity() {
                     val intent = Intent(this, TrackParcelActivity::class.java)
                     startActivity(intent)
                 }
+                R.id.nav_help -> {
+                    val intent = Intent(this, HelpSupportActivity::class.java)
+                    startActivity(intent)
+                }
                 R.id.nav_admin -> {
                     val intent = Intent(this, AdminLoginActivity::class.java)
                     startActivity(intent)
                 }
                 R.id.nav_logout -> {
-                    com.example.mstperfumes.data.UserRepository.clearActiveSession()
-                    val sharedPrefs = getSharedPreferences("UserPrefs", MODE_PRIVATE)
-                    sharedPrefs.edit().clear().apply()
-
+                    com.example.mstperfumes.data.SsoAuthManager.signOut(this)
                     Toast.makeText(this, "Logged out successfully", Toast.LENGTH_SHORT).show()
                     val intent = Intent(this, LoginActivity::class.java)
+                    intent.putExtra("force_relogin", true)
                     intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                     startActivity(intent)
                     finish()
@@ -179,4 +185,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun isUserMember(): Boolean = isMember
+
+    override fun onCreateOptionsMenu(menu: android.view.Menu?): Boolean {
+        menuInflater.inflate(R.menu.main_toolbar_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
+        if (item.itemId == R.id.action_help) {
+            val intent = Intent(this, HelpSupportActivity::class.java)
+            startActivity(intent)
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
 }

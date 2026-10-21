@@ -10,6 +10,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.mstperfumes.adapters.AdminProductAdapter
+import com.example.mstperfumes.data.DatabaseRepository
 import com.example.mstperfumes.data.ProductRepository
 import com.example.mstperfumes.databinding.ActivityAdminDashboardBinding
 import com.example.mstperfumes.models.Product
@@ -18,6 +19,34 @@ class AdminDashboardActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAdminDashboardBinding
     private lateinit var adapter: AdminProductAdapter
+
+    private var onImagePickedCallback: ((android.net.Uri) -> Unit)? = null
+
+    private val pickImageLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        uri?.let {
+            val savedUri = saveImageToInternalStorage(it)
+            onImagePickedCallback?.invoke(savedUri)
+        }
+    }
+
+    private fun saveImageToInternalStorage(sourceUri: android.net.Uri): android.net.Uri {
+        return try {
+            val inputStream = contentResolver.openInputStream(sourceUri)
+            val file = java.io.File(filesDir, "product_${System.currentTimeMillis()}.jpg")
+            val outputStream = java.io.FileOutputStream(file)
+            inputStream?.use { input ->
+                outputStream.use { output ->
+                    input.copyTo(output)
+                }
+            }
+            android.net.Uri.fromFile(file)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            sourceUri
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +74,14 @@ class AdminDashboardActivity : AppCompatActivity() {
         binding.btnViewWishlists.setOnClickListener {
             showAllWishlistsDialog()
         }
+
+        binding.btnViewSupportTickets.setOnClickListener {
+            showSupportTicketsDialog()
+        }
+
+        binding.btnStakeholderDocs.setOnClickListener {
+            showStakeholderDocsDialog()
+        }
     }
 
     override fun onResume() {
@@ -57,11 +94,13 @@ class AdminDashboardActivity : AppCompatActivity() {
         binding.adminToolbar.title = "Admin Dashboard - MST Perfumes"
         binding.adminToolbar.inflateMenu(R.menu.navigation_menu)
         
-        // Clear old menu items and add custom Admin actions
         binding.adminToolbar.menu.clear()
         val logoutMenuItem = binding.adminToolbar.menu.add("Logout")
         logoutMenuItem.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
         
+        val helpDocsMenuItem = binding.adminToolbar.menu.add("Help & Support")
+        helpDocsMenuItem.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
+
         val viewStoreMenuItem = binding.adminToolbar.menu.add("View Store")
         viewStoreMenuItem.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
 
@@ -74,6 +113,11 @@ class AdminDashboardActivity : AppCompatActivity() {
                     intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                     startActivity(intent)
                     finish()
+                    true
+                }
+                "Help & Support" -> {
+                    val intent = Intent(this, HelpSupportActivity::class.java)
+                    startActivity(intent)
                     true
                 }
                 "View Store" -> {
@@ -97,7 +141,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     }
 
     private fun updateDashboardStats() {
-        val dbRepo = com.example.mstperfumes.data.DatabaseRepository(this)
+        val dbRepo = DatabaseRepository(this)
         val allProducts = ProductRepository.getAllProducts()
         val menCount = ProductRepository.getMenProducts().size
         val womenCount = ProductRepository.getWomenProducts().size
@@ -112,7 +156,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     }
 
     private fun showRegisteredUsersDialog() {
-        val dbRepo = com.example.mstperfumes.data.DatabaseRepository(this)
+        val dbRepo = DatabaseRepository(this)
         val users = dbRepo.getAllUsers()
         val userDetailsArray = users.map { "👤 ${it.name}\n✉️ ${it.email}\n📅 Registered: ${it.registeredDate}" }.toTypedArray()
 
@@ -124,7 +168,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     }
 
     private fun showAllOrdersDialog() {
-        val dbRepo = com.example.mstperfumes.data.DatabaseRepository(this)
+        val dbRepo = DatabaseRepository(this)
         val orders = dbRepo.getAllOrders()
         val orderStrings = orders.map { 
             "📦 Code: ${it.orderCode}\n👤 Customer: ${it.userName}\n🛒 Items: ${it.itemsSummary}\n💰 Total: R${it.totalAmount}\n📍 Address: ${it.shippingAddress}\n⚡ Status: ${it.status}" 
@@ -141,7 +185,7 @@ class AdminDashboardActivity : AppCompatActivity() {
     }
 
     private fun showChangeOrderStatusDialog(order: com.example.mstperfumes.models.UserOrder) {
-        val dbRepo = com.example.mstperfumes.data.DatabaseRepository(this)
+        val dbRepo = DatabaseRepository(this)
         val statuses = arrayOf("Order Placed", "Preparing", "In Transit", "Delivered")
 
         AlertDialog.Builder(this)
@@ -149,14 +193,22 @@ class AdminDashboardActivity : AppCompatActivity() {
             .setItems(statuses) { _, which ->
                 val newStatus = statuses[which]
                 dbRepo.updateOrderStatus(order.orderCode, newStatus)
-                Toast.makeText(this, "Order ${order.orderCode} status updated to $newStatus", Toast.LENGTH_SHORT).show()
+
+                // Trigger FCM Push Notification for "In Transit" or "Delivered"
+                com.example.mstperfumes.data.FcmNotificationHelper.triggerOrderStatusNotification(
+                    context = this,
+                    orderCode = order.orderCode,
+                    newStatus = newStatus
+                )
+
+                Toast.makeText(this, "Order ${order.orderCode} updated to $newStatus (FCM Push Notification Sent)", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel") { dialog, _ -> dialog.cancel() }
             .show()
     }
 
     private fun showAllWishlistsDialog() {
-        val dbRepo = com.example.mstperfumes.data.DatabaseRepository(this)
+        val dbRepo = DatabaseRepository(this)
         val wishlists = dbRepo.getAllWishlists()
         val wishlistStrings = wishlists.map { 
             "❤️ Product: ${it.productName}\n👤 User ID: ${it.userId}\n💰 Price: R${it.retailPrice} / Bulk R${it.bulkPrice}\n🌸 Notes: ${it.scentProfile}" 
@@ -169,13 +221,117 @@ class AdminDashboardActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showSupportTicketsDialog() {
+        val dbRepo = DatabaseRepository(this)
+        val tickets = dbRepo.getAllSupportTickets()
+        if (tickets.isEmpty()) {
+            Toast.makeText(this, "No support inquiries submitted yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val ticketStrings = tickets.map {
+            "📩 [${it.status}] ${it.category}\n👤 ${it.userName} (${it.userEmail})\n📌 ${it.subject}\n💬 ${it.message}"
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Support Inquiries (${tickets.size})")
+            .setItems(ticketStrings) { _, which ->
+                val selectedTicket = tickets[which]
+                showUpdateTicketStatusDialog(selectedTicket)
+            }
+            .setPositiveButton("Close") { dialog, _ -> dialog.dismiss() }
+            .show()
+    }
+
+    private fun showUpdateTicketStatusDialog(ticket: com.example.mstperfumes.models.SupportTicket) {
+        val dbRepo = DatabaseRepository(this)
+        val statuses = arrayOf("Pending", "In Progress", "Resolved")
+
+        AlertDialog.Builder(this)
+            .setTitle("Update Status for Ticket #${ticket.id}")
+            .setMessage("Subject: ${ticket.subject}\nUser: ${ticket.userName}")
+            .setItems(statuses) { _, which ->
+                val newStatus = statuses[which]
+                dbRepo.updateSupportTicketStatus(ticket.id, newStatus)
+                Toast.makeText(this, "Ticket #${ticket.id} status set to $newStatus", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel") { dialog, _ -> dialog.cancel() }
+            .show()
+    }
+
+    private fun showStakeholderDocsDialog() {
+        val docsText = """
+            📱 MST PERFUMES - SYSTEM ARCHITECTURE & STAKEHOLDER GUIDE
+
+            1. SOFTWARE BUSINESS OVERVIEW
+            MST Perfumes is an enterprise luxury fragrance application providing both retail e-commerce and bulk wholesale reseller distribution with tiered pricing and live parcel logistics.
+
+            2. EMBEDDED HELP & DOCUMENTATION
+            End-users and external stakeholders can access the embedded Help & Documentation Center from the Navigation Drawer, Top Toolbar ('?'), or Profile menu. Features include:
+            • Real-time FAQ & User Guide search
+            • Category-based filtering (Retail vs Bulk, Logistics, Wallet, Forum)
+            • Direct Hotline dialing & Email support intent
+            • Support ticket submission with cloud-sync fallback
+
+            3. DATABASE & FIREBASE CLOUD ARCHITECTURE
+            • Local-First SQLite Database ('DatabaseRepository') provides complete offline reliability.
+            • Firebase Cloud Synchronization ('FirebaseSupportSyncHelper') automatically pushes support inquiries and order updates to Firebase Firestore / Realtime DB when connected.
+            • Connecting Firebase: Simply place 'google-services.json' in the app/ directory and enable Firebase Console.
+
+            4. ADMIN & OPERATIONAL CONTROLS
+            Admins can manage product inventories, approve pricing, view user accounts, update parcel delivery statuses, and review/resolve customer support tickets.
+        """.trimIndent()
+
+        AlertDialog.Builder(this)
+            .setTitle("📖 System & Stakeholder Documentation")
+            .setMessage(docsText)
+            .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+            .setNeutralButton("Open Full Help Hub") { _, _ ->
+                val intent = Intent(this, HelpSupportActivity::class.java)
+                startActivity(intent)
+            }
+            .show()
+    }
+
     private fun showAddProductDialog() {
         val builder = AlertDialog.Builder(this)
         builder.setTitle("Add New Product")
 
+        val scrollView = android.widget.ScrollView(this)
         val layout = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(50, 20, 50, 10)
+        }
+
+        var selectedImageUriString: String? = null
+
+        val ivPreview = android.widget.ImageView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                300
+            ).apply { bottomMargin = 16 }
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            setImageResource(android.R.drawable.ic_menu_gallery)
+            setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
+        }
+
+        val btnSelectImage = com.google.android.material.button.MaterialButton(this).apply {
+            text = "📷 Upload Product Image"
+            setBackgroundColor(android.graphics.Color.parseColor("#2C1810"))
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 20 }
+            setOnClickListener {
+                onImagePickedCallback = { uri ->
+                    selectedImageUriString = uri.toString()
+                    com.bumptech.glide.Glide.with(this@AdminDashboardActivity)
+                        .load(uri)
+                        .into(ivPreview)
+                }
+                pickImageLauncher.launch("image/*")
+            }
         }
 
         val etName = EditText(this).apply { hint = "Product Name (e.g. Amber Oud)" }
@@ -195,6 +351,8 @@ class AdminDashboardActivity : AppCompatActivity() {
         val categoryAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categories)
         spCategory.adapter = categoryAdapter
 
+        layout.addView(ivPreview)
+        layout.addView(btnSelectImage)
         layout.addView(etName)
         layout.addView(etSize)
         layout.addView(etRetailPrice)
@@ -202,7 +360,8 @@ class AdminDashboardActivity : AppCompatActivity() {
         layout.addView(etScentProfile)
         layout.addView(spCategory)
 
-        builder.setView(layout)
+        scrollView.addView(layout)
+        builder.setView(scrollView)
 
         builder.setPositiveButton("Add") { dialog, _ ->
             val name = etName.text.toString().trim()
@@ -219,7 +378,8 @@ class AdminDashboardActivity : AppCompatActivity() {
                     retailPrice = retailPrice,
                     bulkPrice = bulkPrice,
                     scentProfile = scentProfile,
-                    category = category
+                    category = category,
+                    imageUri = selectedImageUriString
                 )
                 updateDashboardStats()
                 Toast.makeText(this, "Product added successfully!", Toast.LENGTH_SHORT).show()
@@ -237,9 +397,54 @@ class AdminDashboardActivity : AppCompatActivity() {
         val builder = AlertDialog.Builder(this)
         builder.setTitle("Edit Product")
 
+        val scrollView = android.widget.ScrollView(this)
         val layout = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             setPadding(50, 20, 50, 10)
+        }
+
+        var selectedImageUriString: String? = product.imageUri
+
+        val ivPreview = android.widget.ImageView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                300
+            ).apply { bottomMargin = 16 }
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
+
+            if (!product.imageUri.isNullOrEmpty()) {
+                com.bumptech.glide.Glide.with(this@AdminDashboardActivity)
+                    .load(product.imageUri)
+                    .placeholder(if (product.imageResId != 0) product.imageResId else android.R.drawable.ic_menu_gallery)
+                    .error(if (product.imageResId != 0) product.imageResId else android.R.drawable.ic_menu_gallery)
+                    .into(this)
+            } else if (product.imageResId != 0) {
+                com.bumptech.glide.Glide.with(this@AdminDashboardActivity)
+                    .load(product.imageResId)
+                    .into(this)
+            } else {
+                setImageResource(android.R.drawable.ic_menu_gallery)
+            }
+        }
+
+        val btnSelectImage = com.google.android.material.button.MaterialButton(this).apply {
+            text = "📷 Change Product Image"
+            setBackgroundColor(android.graphics.Color.parseColor("#2C1810"))
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 20 }
+            setOnClickListener {
+                onImagePickedCallback = { uri ->
+                    selectedImageUriString = uri.toString()
+                    com.bumptech.glide.Glide.with(this@AdminDashboardActivity)
+                        .load(uri)
+                        .into(ivPreview)
+                }
+                pickImageLauncher.launch("image/*")
+            }
         }
 
         val etName = EditText(this).apply { 
@@ -271,6 +476,8 @@ class AdminDashboardActivity : AppCompatActivity() {
         spCategory.adapter = categoryAdapter
         spCategory.setSelection(if (product.category.equals("women", ignoreCase = true)) 1 else 0)
 
+        layout.addView(ivPreview)
+        layout.addView(btnSelectImage)
         layout.addView(etName)
         layout.addView(etSize)
         layout.addView(etRetailPrice)
@@ -278,7 +485,8 @@ class AdminDashboardActivity : AppCompatActivity() {
         layout.addView(etScentProfile)
         layout.addView(spCategory)
 
-        builder.setView(layout)
+        scrollView.addView(layout)
+        builder.setView(scrollView)
 
         builder.setPositiveButton("Save Changes") { dialog, _ ->
             val name = etName.text.toString().trim()
@@ -296,7 +504,8 @@ class AdminDashboardActivity : AppCompatActivity() {
                     retailPrice = retailPrice,
                     bulkPrice = bulkPrice,
                     scentProfile = scentProfile,
-                    category = category
+                    category = category,
+                    imageUri = selectedImageUriString
                 )
                 updateDashboardStats()
                 Toast.makeText(this, "Product updated successfully!", Toast.LENGTH_SHORT).show()

@@ -3,6 +3,7 @@ package com.example.mstperfumes.data
 import android.content.ContentValues
 import android.content.Context
 import com.example.mstperfumes.models.Product
+import com.example.mstperfumes.models.SupportTicket
 import com.example.mstperfumes.models.User
 import com.example.mstperfumes.models.UserMessage
 import com.example.mstperfumes.models.UserOrder
@@ -13,11 +14,59 @@ import java.util.Locale
 
 class DatabaseRepository(context: Context) {
 
-    private val dbHelper = DatabaseHelper(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val dbHelper by lazy { DatabaseHelper(appContext) }
 
     // ==================== USER AUTH & ACCOUNTS ====================
 
+    fun findUserByEmail(email: String): User? {
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            DatabaseHelper.TABLE_USER,
+            null,
+            "${DatabaseHelper.COL_USER_EMAIL} = ?",
+            arrayOf(email),
+            null, null, null
+        )
+
+        var user: User? = null
+        if (cursor.moveToFirst()) {
+            val id = cursor.getInt(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_USER_ID))
+            val name = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_USER_NAME))
+            val userEmail = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_USER_EMAIL))
+            val regDate = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_USER_REGISTERED_DATE))
+            user = User(id = id, name = name, email = userEmail, registeredDate = regDate)
+        }
+        cursor.close()
+        return user
+    }
+
+    fun getOrCreateUser(name: String, email: String, passwordRaw: String = "sso_pass"): User {
+        val existing = findUserByEmail(email)
+        if (existing != null) {
+            return existing
+        }
+        return registerUser(name, email, passwordRaw)
+    }
+
     fun registerUser(name: String, email: String, passwordRaw: String): User {
+        val existingUser = findUserByEmail(email)
+        if (existingUser != null) {
+            val db = dbHelper.writableDatabase
+            val passwordHash = DatabaseHelper.md5(passwordRaw)
+            val values = ContentValues().apply {
+                put(DatabaseHelper.COL_USER_NAME, name)
+                put(DatabaseHelper.COL_USER_PASSWORD_HASH, passwordHash)
+            }
+            db.update(
+                DatabaseHelper.TABLE_USER,
+                values,
+                "${DatabaseHelper.COL_USER_ID} = ?",
+                arrayOf(existingUser.id.toString())
+            )
+            return User(id = existingUser.id, name = name, email = email, registeredDate = existingUser.registeredDate)
+        }
+
         val db = dbHelper.writableDatabase
         val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
         val currentDate = dateFormat.format(Date())
@@ -31,10 +80,7 @@ class DatabaseRepository(context: Context) {
             put(DatabaseHelper.COL_USER_REGISTERED_DATE, currentDate)
         }
 
-        val newRowId = db.insertWithOnConflict(
-            DatabaseHelper.TABLE_USER, null, values,
-            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
-        )
+        val newRowId = db.insert(DatabaseHelper.TABLE_USER, null, values)
 
         return User(id = newRowId.toInt(), name = name, email = email, registeredDate = currentDate)
     }
@@ -405,6 +451,7 @@ class DatabaseRepository(context: Context) {
                 put(DatabaseHelper.COL_WISHLIST_SCENT, product.scentProfile)
                 put(DatabaseHelper.COL_WISHLIST_CATEGORY, product.category)
                 put(DatabaseHelper.COL_WISHLIST_IMAGE, product.imageResId)
+                put(DatabaseHelper.COL_WISHLIST_IMAGE_URI, product.imageUri)
                 put(DatabaseHelper.COL_WISHLIST_ADDED_DATE, currentDate)
             }
             db.insertWithOnConflict(
@@ -442,6 +489,7 @@ class DatabaseRepository(context: Context) {
         )
 
         if (cursor.moveToFirst()) {
+            val imgUriIdx = cursor.getColumnIndex(DatabaseHelper.COL_WISHLIST_IMAGE_URI)
             do {
                 items.add(
                     WishlistItem(
@@ -454,7 +502,8 @@ class DatabaseRepository(context: Context) {
                         scentProfile = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_SCENT)),
                         category = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_CATEGORY)),
                         imageResId = cursor.getInt(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_IMAGE)),
-                        addedDate = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_ADDED_DATE))
+                        addedDate = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_ADDED_DATE)),
+                        imageUri = if (imgUriIdx != -1) cursor.getString(imgUriIdx) else null
                     )
                 )
             } while (cursor.moveToNext())
@@ -473,6 +522,7 @@ class DatabaseRepository(context: Context) {
         )
 
         if (cursor.moveToFirst()) {
+            val imgUriIdx = cursor.getColumnIndex(DatabaseHelper.COL_WISHLIST_IMAGE_URI)
             do {
                 items.add(
                     WishlistItem(
@@ -485,12 +535,92 @@ class DatabaseRepository(context: Context) {
                         scentProfile = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_SCENT)),
                         category = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_CATEGORY)),
                         imageResId = cursor.getInt(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_IMAGE)),
-                        addedDate = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_ADDED_DATE))
+                        addedDate = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_WISHLIST_ADDED_DATE)),
+                        imageUri = if (imgUriIdx != -1) cursor.getString(imgUriIdx) else null
                     )
                 )
             } while (cursor.moveToNext())
         }
         cursor.close()
         return items
+    }
+
+    // ==================== SUPPORT TICKETS & INQUIRIES ====================
+
+    fun createSupportTicket(
+        name: String,
+        email: String,
+        category: String,
+        subject: String,
+        message: String
+    ): SupportTicket {
+        val db = dbHelper.writableDatabase
+        val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+        val currentDate = dateFormat.format(Date())
+
+        val values = ContentValues().apply {
+            put(DatabaseHelper.COL_CONTACT_NAME, name)
+            put(DatabaseHelper.COL_CONTACT_EMAIL, email)
+            put(DatabaseHelper.COL_CONTACT_CATEGORY, category)
+            put(DatabaseHelper.COL_CONTACT_SUBJECT, subject)
+            put(DatabaseHelper.COL_CONTACT_MESSAGE, message)
+            put(DatabaseHelper.COL_CONTACT_STATUS, "Pending")
+            put(DatabaseHelper.COL_CONTACT_DATE, currentDate)
+        }
+
+        val newId = db.insert(DatabaseHelper.TABLE_CONTACT, null, values)
+
+        return SupportTicket(
+            id = newId.toInt(),
+            userName = name,
+            userEmail = email,
+            category = category,
+            subject = subject,
+            message = message,
+            status = "Pending",
+            dateSubmitted = currentDate
+        )
+    }
+
+    fun getAllSupportTickets(): List<SupportTicket> {
+        val tickets = mutableListOf<SupportTicket>()
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            DatabaseHelper.TABLE_CONTACT,
+            null, null, null, null, null,
+            "${DatabaseHelper.COL_CONTACT_ID} DESC"
+        )
+
+        if (cursor.moveToFirst()) {
+            do {
+                tickets.add(
+                    SupportTicket(
+                        id = cursor.getInt(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_ID)),
+                        userName = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_NAME)),
+                        userEmail = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_EMAIL)),
+                        category = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_CATEGORY)),
+                        subject = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_SUBJECT)),
+                        message = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_MESSAGE)),
+                        status = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_STATUS)),
+                        dateSubmitted = cursor.getString(cursor.getColumnIndexOrThrow(DatabaseHelper.COL_CONTACT_DATE))
+                    )
+                )
+            } while (cursor.moveToNext())
+        }
+        cursor.close()
+        return tickets
+    }
+
+    fun updateSupportTicketStatus(ticketId: Int, newStatus: String): Boolean {
+        val db = dbHelper.writableDatabase
+        val values = ContentValues().apply {
+            put(DatabaseHelper.COL_CONTACT_STATUS, newStatus)
+        }
+        return db.update(
+            DatabaseHelper.TABLE_CONTACT,
+            values,
+            "${DatabaseHelper.COL_CONTACT_ID} = ?",
+            arrayOf(ticketId.toString())
+        ) > 0
     }
 }
